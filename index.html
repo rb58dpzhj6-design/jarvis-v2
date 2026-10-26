@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Jarvis">
+<meta name="theme-color" content="#000814">
+<title>Jarvis</title>
+<style>
+html,body{margin:0;height:100%;background:#000814;color:#9fe8ff;font-family:-apple-system,Helvetica,sans-serif;overflow:hidden}
+#app{display:flex;flex-direction:column;height:100%;padding:env(safe-area-inset-top) 16px env(safe-area-inset-bottom);box-sizing:border-box}
+canvas{flex:1;width:100%;min-height:0;touch-action:manipulation}
+#status{text-align:center;font-size:14px;letter-spacing:2px;text-transform:uppercase;opacity:.8;height:20px}
+#text{text-align:center;font-size:17px;line-height:1.4;max-height:30%;overflow:auto;padding:8px 4px}
+#row{display:flex;gap:8px;padding:8px 0}
+input{flex:1;min-width:0;font-size:16px;padding:12px;border-radius:12px;border:1px solid #1d4a63;background:#001a2e;color:#cff4ff}
+button{font-size:16px;padding:12px 16px;border-radius:12px;border:0;background:#0aa6d6;color:#00131f}
+#cfg{background:#1d4a63;color:#cff4ff}
+</style>
+</head>
+<body>
+<div id="app">
+  <canvas id="orb"></canvas>
+  <div id="status"></div>
+  <div id="text"></div>
+  <div id="row">
+    <input id="inp" placeholder="Oppure scrivi qui…">
+    <button id="send">Invia</button>
+    <button id="cfg">⚙</button>
+  </div>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+const store={
+  get:k=>{try{return localStorage.getItem(k)}catch(e){return null}},
+  set:(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}}
+};
+let state='idle',history=[];
+const SYS='Sei Jarvis, un assistente personale elegante, ironico e molto efficiente. Rispondi sempre in italiano, in modo breve e parlato (massimo 3 frasi), senza elenchi né formattazione. Oggi è '+new Date().toLocaleString('it-IT')+'.';
+
+function setState(s){
+  state=s;
+  $('status').textContent={idle:'Tocca il cerchio',listening:'Ti ascolto…',thinking:'Elaboro…',speaking:'Parlo…'}[s];
+}
+
+function config(){
+  const k=prompt('Incolla la tua chiave Gemini:',store.get('key')||'');
+  if(k!==null&&k.trim())store.set('key',k.trim());
+  const m=prompt('Modello (lascia così se non sai):',store.get('model')||'gemini-flash-latest');
+  if(m!==null&&m.trim())store.set('model',m.trim());
+}
+
+async function ask(q){
+  if(!store.get('key')){config();if(!store.get('key'))return;}
+  setState('thinking');
+  history.push({role:'user',parts:[{text:q}]});
+  try{
+    const model=store.get('model')||'gemini-flash-latest';
+    const url='https://generativelanguage.googleapis.com/v1beta/models/'+model+':generateContent?key='+encodeURIComponent(store.get('key'));
+    const r=await fetch(url,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({systemInstruction:{parts:[{text:SYS}]},contents:history.slice(-20)})
+    });
+    const j=await r.json();
+    if(!r.ok)throw new Error((j.error&&j.error.message)||r.status);
+    const a=j.candidates[0].content.parts.map(p=>p.text||'').join('').trim();
+    history.push({role:'model',parts:[{text:a}]});
+    $('text').textContent=a;
+    speak(a);
+  }catch(e){
+    history.pop();
+    $('text').textContent='Errore: '+e.message;
+    setState('idle');
+  }
+}
+
+function speak(t){
+  speechSynthesis.cancel();
+  const u=new SpeechSynthesisUtterance(t.replace(/[*_#`]/g,''));
+  u.lang='it-IT';
+  const v=speechSynthesis.getVoices().find(v=>v.lang&&v.lang.startsWith('it'));
+  if(v)u.voice=v;
+  u.onstart=()=>setState('speaking');
+  u.onend=u.onerror=()=>setState('idle');
+  speechSynthesis.speak(u);
+}
+
+function listen(){
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!SR){$('text').textContent='Il riconoscimento vocale non è disponibile qui: scrivi nella casella.';return;}
+  const r=new SR();
+  r.lang='it-IT';
+  r.interimResults=false;
+  let got=false;
+  r.onstart=()=>{setState('listening');$('text').textContent='';};
+  r.onresult=e=>{got=true;const t=e.results[0][0].transcript;$('text').textContent='« '+t+' »';ask(t);};
+  r.onerror=e=>{$('text').textContent='Microfono: '+e.error;setState('idle');};
+  r.onend=()=>{if(!got&&state==='listening')setState('idle');};
+  r.start();
+}
+
+$('orb').addEventListener('click',()=>{
+  if(state==='speaking'){speechSynthesis.cancel();setState('idle');return;}
+  if(state==='thinking'||state==='listening')return;
+  speechSynthesis.speak(new SpeechSynthesisUtterance(''));
+  listen();
+});
+$('send').onclick=()=>{
+  const q=$('inp').value.trim();
+  if(!q)return;
+  $('inp').value='';
+  speechSynthesis.speak(new SpeechSynthesisUtterance(''));
+  $('text').textContent='« '+q+' »';
+  ask(q);
+};
+$('inp').addEventListener('keydown',e=>{if(e.key==='Enter')$('send').click();});
+$('cfg').onclick=config;
+speechSynthesis.getVoices();
+
+const cv=$('orb'),ctx=cv.getContext('2d');
+function fit(){const d=devicePixelRatio||1;cv.width=cv.clientWidth*d;cv.height=cv.clientHeight*d;}
+addEventListener('resize',fit);
+fit();
+let t=0;
+function draw(){
+  t+=0.02;
+  const d=devicePixelRatio||1,w=cv.width,h=cv.height,cx=w/2,cy=h/2,R=Math.min(w,h)*0.22;
+  ctx.clearRect(0,0,w,h);
+  const amp={idle:.03,listening:.12,thinking:.06,speaking:.16}[state];
+  const spd={idle:1,listening:2,thinking:4,speaking:3}[state];
+  const col={idle:'10,166,214',listening:'80,255,200',thinking:'255,190,60',speaking:'10,200,255'}[state];
+  const pulse=1+amp*Math.sin(t*spd*2)+(state==='speaking'?amp*.5*Math.sin(t*11):0);
+  const g=ctx.createRadialGradient(cx,cy,R*.2,cx,cy,R*pulse*2.2);
+  g.addColorStop(0,'rgba('+col+',.55)');
+  g.addColorStop(1,'rgba('+col+',0)');
+  ctx.fillStyle=g;
+  ctx.beginPath();ctx.arc(cx,cy,R*pulse*2.2,0,7);ctx.fill();
+  for(let i=0;i<3;i++){
+    ctx.strokeStyle='rgba('+col+','+(0.9-i*.25)+')';
+    ctx.lineWidth=(3-i)*d;
+    ctx.setLineDash([R*.3,R*.15*(i+1)]);
+    ctx.lineDashOffset=-t*spd*R*.3*(i%2?-1:1);
+    ctx.beginPath();ctx.arc(cx,cy,R*pulse*(1+i*.28),0,7);ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  ctx.fillStyle='rgba('+col+',.9)';
+  ctx.beginPath();ctx.arc(cx,cy,R*.35*pulse,0,7);ctx.fill();
+  requestAnimationFrame(draw);
+}
+setState('idle');
+$('text').textContent='Buongiorno. Tocca ⚙ per inserire la chiave, poi tocca il cerchio e parlami.';
+draw();
+</script>
+<script>
+function speak(t){
+  speechSynthesis.cancel();
+  const u=new SpeechSynthesisUtterance(t.replace(/[*_#`]/g,''));
+  const all=speechSynthesis.getVoices();
+  const pref=(store.get('voice')||'Luca').toLowerCase();
+  const v=all.find(x=>x.name.toLowerCase().includes(pref))||all.find(x=>x.lang&&x.lang.startsWith('it'));
+  if(v){u.voice=v;u.lang=v.lang;}else{u.lang='it-IT';}
+  u.rate=0.95;u.pitch=0.9;
+  u.onstart=()=>setState('speaking');
+  u.onend=u.onerror=()=>setState('idle');
+  speechSynthesis.speak(u);
+}
+function config(){
+  const k=prompt('Chiave Gemini:',store.get('key')||'');
+  if(k!==null&&k.trim())store.set('key',k.trim());
+  const m=prompt('Modello:',store.get('model')||'gemini-flash-latest');
+  if(m!==null&&m.trim())store.set('model',m.trim());
+  const names=speechSynthesis.getVoices().filter(x=>/^(it|en)/.test(x.lang)).map(x=>x.name).join(', ');
+  const n=prompt('Voce (scrivi il nome, es. Luca o Daniel). Disponibili: '+names,store.get('voice')||'Luca');
+  if(n!==null&&n.trim())store.set('voice',n.trim());
+}
+$('cfg').onclick=config;
+</script>
+<script>
+function speak(t){
+  speechSynthesis.cancel();
+  const u=new SpeechSynthesisUtterance(t.replace(/[*_#`]/g,''));
+  u.lang='it-IT';
+  u.rate=0.95;
+  u.pitch=0.9;
+  u.onstart=()=>setState('speaking');
+  u.onend=u.onerror=()=>setState('idle');
+  speechSynthesis.speak(u);
+}
+</script>
+<script>
+(function(){
+  const css=document.createElement('style');
+  css.textContent=`
+  #app{position:relative;z-index:1}
+  #grid{position:fixed;inset:0;z-index:0;pointer-events:none;
+    background-image:linear-gradient(rgba(0,200,255,.07) 1px,transparent 1px),linear-gradient(90deg,rgba(0,200,255,.07) 1px,transparent 1px);
+    background-size:32px 32px;
+    -webkit-mask-image:radial-gradient(circle at 50% 40%,#000 20%,transparent 75%);
+    mask-image:radial-gradient(circle at 50% 40%,#000 20%,transparent 75%)}
+  #scan{position:fixed;left:0;right:0;height:120px;z-index:2;pointer-events:none;
+    background:linear-gradient(transparent,rgba(0,200,255,.08),transparent);
+    animation:scan 6s linear infinite}
+  @keyframes scan{from{top:-120px}to{top:100%}}
+  #hud{position:fixed;inset:0;z-index:3;pointer-events:none;
+    font-family:ui-monospace,Menlo,monospace;color:#7fdcff;
+    text-transform:uppercase;letter-spacing:1.5px}
+  #hud .p{position:absolute;font-size:11px;line-height:1.7;opacity:.9}
+  #hud .tl{top:calc(env(safe-area-inset-top) + 14px);left:16px}
+  #hud .tr{top:calc(env(safe-area-inset-top) + 14px);right:16px;text-align:right}
+  #hud .ml{top:calc(env(safe-area-inset-top) + 86px);left:16px}
+  #hud .mr{top:calc(env(safe-area-inset-top) + 86px);right:16px;text-align:right}
+  #hud .big{font-size:20px;letter-spacing:3px;color:#cff4ff}
+  #hud b{color:#cff4ff;font-weight:600}
+  #hud .c{position:absolute;width:22px;height:22px;border:2px solid rgba(0,200,255,.6)}
+  #hud .c1{top:8px;left:8px;border-right:0;border-bottom:0}
+  #hud .c2{top:8px;right:8px;border-left:0;border-bottom:0}
+  #hud .c3{bottom:8px;left:8px;border-right:0;border-top:0}
+  #hud .c4{bottom:8px;right:8px;border-left:0;border-top:0}
+  #status{letter-spacing:4px}
+  `;
+  document.head.appendChild(css);
+
+  const grid=document.createElement('div');grid.id='grid';
+  const scan=document.createElement('div');scan.id='scan';
+  const hud=document.createElement('div');hud.id='hud';
+  hud.innerHTML=
+    '<div class="c c1"></div><div class="c c2"></div><div class="c c3"></div><div class="c c4"></div>'+
+    '<div class="p tl"><div class="big">JARVIS</div><div>Sistema attivo</div></div>'+
+    '<div class="p tr"><div class="big" id="hClock">--:--:--</div><div id="hDate"></div></div>'+
+    '<div class="p ml"><div>Stato <b id="hState">-</b></div><div>Rete <b id="hNet">-</b></div></div>'+
+    '<div class="p mr"><div>Scambi <b id="hN">0</b></div><div>Modello <b id="hModel">-</b></div></div>';
+  document.body.appendChild(grid);
+  document.body.appendChild(scan);
+  document.body.appendChild(hud);
+
+  const stati={idle:'In attesa',listening:'Ascolto',thinking:'Elaboro',speaking:'Parlo'};
+  function tick(){
+    const n=new Date();
+    document.getElementById('hClock').textContent=n.toLocaleTimeString('it-IT');
+    document.getElementById('hDate').textContent=n.toLocaleDateString('it-IT',{weekday:'short',day:'2-digit',month:'short'});
+    document.getElementById('hState').textContent=stati[state]||'';
+    document.getElementById('hNet').textContent=navigator.onLine?'Online':'Offline';
+    document.getElementById('hN').textContent=Math.floor(history.length/2);
+    document.getElementById('hModel').textContent=(store.get('model')||'').replace('gemini-','');
+  }
+  setInterval(tick,500);
+  tick();
+})();
+
+let tt=0;
+function draw(){
+  tt+=0.016;
+  const d=devicePixelRatio||1,w=cv.width,h=cv.height,cx=w/2,cy=h/2,R=Math.min(w,h)*0.2;
+  ctx.setLineDash([]);
+  ctx.clearRect(0,0,w,h);
+  const col={idle:'0,200,255',listening:'80,255,200',thinking:'255,190,60',speaking:'0,220,255'}[state];
+  const spd={idle:1,listening:1.8,thinking:3.5,speaking:2.4}[state];
+  const amp={idle:.02,listening:.07,thinking:.04,speaking:.1}[state];
+  const pulse=1+amp*Math.sin(tt*spd*3)+(state==='speaking'?amp*.6*Math.sin(tt*13):0);
+
+  const g=ctx.createRadialGradient(cx,cy,R*.1,cx,cy,R*2.6);
+  g.addColorStop(0,'rgba('+col+',.35)');
+  g.addColorStop(1,'rgba('+col+',0)');
+  ctx.fillStyle=g;
+  ctx.beginPath();ctx.arc(cx,cy,R*2.6,0,7);ctx.fill();
+
+  ctx.save();ctx.translate(cx,cy);ctx.rotate(tt*.15*spd);
+  for(let i=0;i<72;i++){
+    const a=i/72*Math.PI*2,long=i%6===0;
+    const r1=R*1.95,r2=R*(long?1.78:1.86);
+    ctx.strokeStyle='rgba('+col+','+(long?.9:.4)+')';
+    ctx.lineWidth=(long?2:1)*d;
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(a)*r1,Math.sin(a)*r1);
+    ctx.lineTo(Math.cos(a)*r2,Math.sin(a)*r2);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  [[1.6,3,.5],[1.35,2,-.8],[1.1,4,1.2]].forEach((rg,k)=>{
+    ctx.save();ctx.translate(cx,cy);ctx.rotate(tt*rg[2]*spd*.6);
+    ctx.strokeStyle='rgba('+col+','+(.85-k*.2)+')';
+    ctx.lineWidth=(3-k*.6)*d;
+    for(let s=0;s<rg[1];s++){
+      const a0=s/rg[1]*Math.PI*2,a1=a0+Math.PI*2/rg[1]*.62;
+      ctx.beginPath();ctx.arc(0,0,R*rg[0]*pulse,a0,a1);ctx.stroke();
+    }
+    ctx.restore();
+  });
+
+  if(state==='speaking'||state==='listening'){
+    ctx.strokeStyle='rgba('+col+',.9)';
+    ctx.lineWidth=2*d;
+    ctx.beginPath();
+    const N=96;
+    for(let i=0;i<=N;i++){
+      const a=i/N*Math.PI*2;
+      const wob=Math.sin(a*7+tt*9)*Math.sin(a*3-tt*5)*(state==='speaking'?.14:.07);
+      const r=R*(.78+Math.abs(wob)*1.4)*pulse;
+      const x=cx+Math.cos(a)*r,y=cy+Math.sin(a)*r;
+      if(i)ctx.lineTo(x,y);else ctx.moveTo(x,y);
+    }
+    ctx.closePath();ctx.stroke();
+  }
+
+  ctx.fillStyle='rgba('+col+',.9)';
+  ctx.beginPath();ctx.arc(cx,cy,R*.3*pulse,0,7);ctx.fill();
+  ctx.strokeStyle='rgba(255,255,255,.7)';
+  ctx.lineWidth=1.5*d;
+  ctx.beginPath();ctx.arc(cx,cy,R*.42*pulse,0,7);ctx.stroke();
+
+  for(let i=0;i<3;i++){
+    const a=tt*(.9+i*.5)*spd+i*2.1,r=R*2.15;
+    ctx.fillStyle='rgba('+col+',.95)';
+    ctx.beginPath();ctx.arc(cx+Math.cos(a)*r,cy+Math.sin(a)*r,3*d,0,7);ctx.fill();
+  }
+  requestAnimationFrame(draw);
+}
+</script>
+<script>
+const SYS4=SYS+' Quando nel messaggio ci sono DATI REALI, usali per rispondere con precisione (temperature e orari esatti) citando la fonte in modo naturale e senza leggere numeri superflui. Se non hai dati reali e la domanda richiede informazioni aggiornate, dì onestamente che non puoi verificarle: non inventare mai.';
+
+async function gen(model,contents,json,sys){
+  const url='https://generativelanguage.googleapis.com/v1beta/models/'+model+':generateContent?key='+encodeURIComponent(store.get('key'));
+  const body={systemInstruction:{parts:[{text:sys||SYS4}]},contents:contents};
+  if(json)body.generationConfig={responseMimeType:'application/json'};
+  const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const j=await r.json();
+  if(!r.ok)throw new Error((j.error&&j.error.message)||r.status);
+  return j.candidates[0].content.parts.map(p=>p.text||'').join('').trim();
+}
+
+async function route(model,q){
+  try{
+    const t=await gen(model,[{role:'user',parts:[{text:'Classifica questa richiesta. Rispondi SOLO con JSON nel formato {"tipo":"meteo|alba_tramonto|wiki|altro","luogo":"","argomento":""}. "meteo" per tempo, temperature, pioggia; "alba_tramonto" per orario di alba o tramonto; "wiki" per chiedere chi è o cos è qualcosa o qualcuno; "altro" per tutto il resto. "luogo" è la città citata (vuoto se non c\'è). "argomento" è il termine da cercare per "wiki". Richiesta: '+q}]}],true,'Sei un classificatore. Rispondi solo con JSON valido.');
+    return JSON.parse(t);
+  }catch(e){return {tipo:'altro'};}
+}
+
+async function geo(nome){
+  const r=await fetch('https://geocoding-api.open-meteo.com/v1/search?name='+encodeURIComponent(nome)+'&count=1&language=it&format=json');
+  const j=await r.json();
+  if(!j.results||!j.results.length)throw new Error('città non trovata: '+nome);
+  return j.results[0];
+}
+
+async function datiMeteo(luogo){
+  const g=await geo(luogo);
+  const u='https://api.open-meteo.com/v1/forecast?latitude='+g.latitude+'&longitude='+g.longitude+'&current=temperature_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset,weather_code&timezone=auto&forecast_days=3';
+  const r=await fetch(u);
+  const j=await r.json();
+  return {fonte:'Open-Meteo, '+g.name,testo:'Località: '+g.name+'. Orari nel fuso locale, codici meteo WMO. '+JSON.stringify({adesso:j.current,giorni:j.daily})};
+}
+
+async function datiWiki(arg){
+  const u='https://it.wikipedia.org/w/api.php?action=query&generator=search&gsrsearch='+encodeURIComponent(arg)+'&gsrlimit=1&prop=extracts&exintro=1&explaintext=1&exchars=1200&format=json&origin=*';
+  const r=await fetch(u);
+  const j=await r.json();
+  const pages=j.query&&j.query.pages;
+  if(!pages)throw new Error('nessun risultato');
+  const p=Object.values(pages)[0];
+  return {fonte:'Wikipedia, '+p.title,testo:p.title+': '+p.extract};
+}
+
+async function ask(q){
+  if(!store.get('key')){config();if(!store.get('key'))return;}
+  setState('thinking');
+  history.push({role:'user',parts:[{text:q}]});
+  try{
+    const model=store.get('model')||'gemini-3.5-flash-lite';
+    const rt=await route(model,q);
+    let dati=null,errDati='';
+    try{
+      if(rt.tipo==='meteo'||rt.tipo==='alba_tramonto'){
+        let luogo=(rt.luogo||'').trim()||store.get('city')||'';
+        if(!luogo){
+          luogo=(prompt('Di quale città parli? La ricordo per la prossima volta.')||'').trim();
+          if(luogo)store.set('city',luogo);
+        }
+        if(luogo)dati=await datiMeteo(luogo);
+      }else if(rt.tipo==='wiki'&&rt.argomento){
+        dati=await datiWiki(rt.argomento);
+      }
+    }catch(e){errDati=e.message;}
+    const contents=history.slice(-20);
+    if(dati)contents[contents.length-1]={role:'user',parts:[{text:q+'\n\n[DATI REALI — fonte: '+dati.fonte+'. Usa questi dati per rispondere. '+dati.testo+']'}]};
+    const a=await gen(model,contents,false,SYS4);
+    history.push({role:'model',parts:[{text:a}]});
+    let note='';
+    if(dati)note='\n\n🔎 '+dati.fonte;
+    else if(errDati)note='\n\n(dati non disponibili: '+errDati+')';
+    $('text').textContent=a+note;
+    speak(a);
+  }catch(e){
+    history.pop();
+    $('text').textContent='Errore: '+e.message;
+    setState('idle');
+  }
+}
+</script>
+<script>
+const timers=[];
+let wakeLock=null;
+
+(function(){
+  const css=document.createElement('style');
+  css.textContent='#tm{position:fixed;right:16px;top:calc(env(safe-area-inset-top) + 150px);z-index:3;pointer-events:none;text-align:right;font-family:ui-monospace,Menlo,monospace;font-size:12px;letter-spacing:1.5px;text-transform:uppercase;color:#7fdcff;line-height:1.7}#tm b{color:#ffd27a;font-weight:600}';
+  document.head.appendChild(css);
+  const d=document.createElement('div');d.id='tm';document.body.appendChild(d);
+})();
+
+document.addEventListener('click',()=>{
+  try{
+    const AC=window.AudioContext||window.webkitAudioContext;
+    if(!window._ac)window._ac=new AC();
+    if(window._ac.state==='suspended')window._ac.resume();
+  }catch(e){}
+},true);
+
+function saveTimers(){store.set('timers',JSON.stringify(timers));}
+function loadTimers(){
+  try{
+    JSON.parse(store.get('timers')||'[]').forEach(x=>{if(x.fine>Date.now())timers.push(x);});
+  }catch(e){}
+}
+function fmtT(ms){
+  let s=Math.max(0,Math.round(ms/1000));
+  const h=Math.floor(s/3600);s%=3600;
+  const m=Math.floor(s/60);s%=60;
+  const p=n=>String(n).padStart(2,'0');
+  return (h?h+':':'')+p(m)+':'+p(s);
+}
+function renderTimers(){
+  const el=document.getElementById('tm');
+  if(!el)return;
+  el.textContent='';
+  timers.forEach(t=>{
+    const row=document.createElement('div');
+    row.textContent=t.label+' ';
+    const b=document.createElement('b');
+    b.textContent=fmtT(t.fine-Date.now());
+    row.appendChild(b);
+    el.appendChild(row);
+  });
+}
+async function keepAwake(){
+  try{
+    if(timers.length&&!wakeLock&&navigator.wakeLock){
+      wakeLock=await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release',()=>{wakeLock=null;});
+    }else if(!timers.length&&wakeLock){
+      await wakeLock.release();wakeLock=null;
+    }
+  }catch(e){}
+}
+function beep(){
+  try{
+    const AC=window.AudioContext||window.webkitAudioContext;
+    if(!window._ac)window._ac=new AC();
+    const ac=window._ac;
+    if(ac.state==='suspended')ac.resume();
+    for(let i=0;i<3;i++){
+      const o=ac.createOscillator(),g=ac.createGain();
+      const t0=ac.currentTime+i*0.4;
+      o.type='sine';o.frequency.value=880;
+      g.gain.setValueAtTime(0.0001,t0);
+      g.gain.exponentialRampToValueAtTime(0.4,t0+0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001,t0+0.3);
+      o.connect(g);g.connect(ac.destination);
+      o.start(t0);o.stop(t0+0.35);
+    }
+  }catch(e){}
+}
+function addTimer(sec,label){
+  timers.push({fine:Date.now()+sec*1000,label:label||'timer'});
+  saveTimers();renderTimers();keepAwake();
+}
+function clearTimers(){
+  timers.length=0;saveTimers();renderTimers();keepAwake();
+}
+setInterval(()=>{
+  const now=Date.now();
+  const scaduti=timers.filter(t=>t.fine<=now);
+  if(scaduti.length){
+    scaduti.forEach(t=>timers.splice(timers.indexOf(t),1));
+    saveTimers();
+    scaduti.forEach(t=>{
+      beep();
+      const msg='Il timer '+t.label+' è scaduto, '+(store.get('nome')||'signore')+'.';
+      $('text').textContent=msg;
+      speak(msg);
+    });
+    keepAwake();
+  }
+  renderTimers();
+},1000);
+loadTimers();renderTimers();keepAwake();
+
+async function route(model,q){
+  try{
+    const t=await gen(model,[{role:'user',parts:[{text:'Classifica questa richiesta. Rispondi SOLO con JSON nel formato {"tipo":"meteo|alba_tramonto|wiki|timer|annulla_timer|promemoria|altro","luogo":"","argomento":"","secondi":0,"etichetta":""}. "meteo" per tempo, temperature, pioggia; "alba_tramonto" per orario di alba o tramonto; "wiki" per chiedere chi è o cos è qualcosa o qualcuno; "timer" per timer, sveglia, ricordami o avvisami TRA un certo tempo (minuti, ore, secondi): in "secondi" metti la durata totale in secondi e in "etichetta" una o due parole (es. pasta, uova); "annulla_timer" per fermare o cancellare i timer; "promemoria" per un promemoria a un giorno o a un\'ora precisi (es. domani alle 9); "altro" per tutto il resto. "luogo" è la città citata (vuoto se non c\'è). "argomento" è il termine da cercare per "wiki". Richiesta: '+q}]}],true,'Sei un classificatore. Rispondi solo con JSON valido.');
+    return JSON.parse(t);
+  }catch(e){return {tipo:'altro'};}
+}
+
+async function ask(q){
+  if(!store.get('key')){config();if(!store.get('key'))return;}
+  setState('thinking');
+  history.push({role:'user',parts:[{text:q}]});
+  try{
+    const model=store.get('model')||'gemini-3.5-flash-lite';
+    const rt=await route(model,q);
+    let dati=null,errDati='';
+    try{
+      const sec=Math.round(Number(rt.secondi)||0);
+      if(rt.tipo==='timer'&&sec>0){
+        addTimer(sec,rt.etichetta||'timer');
+        dati={fonte:'Timer',testo:'Ho appena avviato un timer di '+sec+' secondi'+(rt.etichetta?' ('+rt.etichetta+')':'')+'. Confermalo in una frase, dicendo la durata in modo naturale (minuti e secondi).'};
+      }else if(rt.tipo==='annulla_timer'){
+        const n=timers.length;
+        clearTimers();
+        dati={fonte:'Timer',testo:'Ho annullato '+n+' timer. Confermalo in una frase.'};
+      }else if(rt.tipo==='promemoria'){
+        dati={fonte:'Jarvis',testo:'L\'utente vuole un promemoria a un giorno o a un\'ora precisi, ma non puoi ancora crearli: per ora sai fare solo timer per un tempo (per esempio tra 10 minuti). Dillo con garbo e proponi un timer.'};
+      }else if(rt.tipo==='meteo'||rt.tipo==='alba_tramonto'){
+        let luogo=(rt.luogo||'').trim()||store.get('city')||'';
+        if(!luogo){
+          luogo=(prompt('Di quale città parli? La ricordo per la prossima volta.')||'').trim();
+          if(luogo)store.set('city',luogo);
+        }
+        if(luogo)dati=await datiMeteo(luogo);
+      }else if(rt.tipo==='wiki'&&rt.argomento){
+        dati=await datiWiki(rt.argomento);
+      }
+    }catch(e){errDati=e.message;}
+    const contents=history.slice(-20);
+    if(dati)contents[contents.length-1]={role:'user',parts:[{text:q+'\n\n[DATI REALI — fonte: '+dati.fonte+'. Usa questi dati per rispondere. '+dati.testo+']'}]};
+    const a=await gen(model,contents,false,SYS4);
+    history.push({role:'model',parts:[{text:a}]});
+    let note='';
+    if(dati&&dati.fonte!=='Timer'&&dati.fonte!=='Jarvis')note='\n\n🔎 '+dati.fonte;
+    else if(errDati)note='\n\n(dati non disponibili: '+errDati+')';
+    $('text').textContent=a+note;
+    speak(a);
+  }catch(e){
+    history.pop();
+    $('text').textContent='Errore: '+e.message;
+    setState('idle');
+  }
+}
+</script>
+
+</body>
+</html>
